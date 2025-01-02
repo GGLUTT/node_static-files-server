@@ -1,72 +1,86 @@
 'use strict';
 
 const http = require('http');
-const fs = require('fs');
 const path = require('path');
+const fs = require('fs');
+
+
+
+const sendErrorResponse = (res, code, message) => {
+  res.statusCode = code;
+  res.end(message);
+};
 
 function createServer() {
-  const server = new http.Server();
+  return http.createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/plain');
 
-  server.on('request', (req, res) => {
-    const urlPath = decodeURIComponent(req.url);
+    const { pathname } = new URL(req.url, `http://${req.headers.host}`);
 
-
-    if (!urlPath.startsWith('/file/')) {
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'text/plain');
-      res.end('Use /file/ to load files. Example: /file/index.html');
-
-      return;
+    if (pathname.includes('//')) {
+      return sendErrorResponse(
+        res,
+        404,
+        'Double slashes are not allowed in the URL.',
+      );
     }
 
-    const publicFolder = path.join(__dirname, 'public');
-    let relativePath = urlPath.replace('/file/', '');
-
-
-    if (!relativePath || relativePath === '/') {
-      relativePath = 'index.html';
+    if (pathname === '/file/' || pathname === '/file') {
+      return sendErrorResponse(
+        res,
+        200,
+        'Path should start with /file/. Correct path is: "/file/<FILE_NAME>".',
+      );
     }
 
-    const normalizedPath = path
-      .normalize(relativePath)
-      .replace(/^(\.\.(\/|\\|$))+/, '');
-    const filePath = path.join(publicFolder, normalizedPath);
-
-    // Перевірка, чи файл знаходиться всередині public
-    if (!filePath.startsWith(publicFolder)) {
-      res.statusCode = 403;
-      res.setHeader('Content-Type', 'text/plain');
-      res.end('Access to files outside public folder is forbidden.');
-
-      return;
+    if (!pathname.startsWith('/file/')) {
+      return sendErrorResponse(
+        res,
+        400,
+        'Request should not contain traversal paths.',
+      );
     }
 
-    // Перевірка існування файлу
-    fs.access(filePath, fs.constants.R_OK, (err) => {
+    const fileName = pathname.replace('/file/', '') || 'index.html';
+
+    const publicPath = path.resolve(__dirname, '..', 'public');
+    const filePath = path.resolve(publicPath, fileName);
+
+    if (!filePath.startsWith(publicPath) || pathname.includes('..')) {
+      return sendErrorResponse(res, 400, 'Path traversal detected.');
+    }
+
+    fs.readFile(filePath, (err, data) => {
       if (err) {
-        res.statusCode = 404;
-        res.setHeader('Content-Type', 'text/plain');
-        res.end('404: File not found');
-
-        return;
+        return sendErrorResponse(res, 404, 'File was not found.');
       }
 
-      // Відправляємо файл
-      const fileStream = fs.createReadStream(filePath);
-
       res.statusCode = 200;
-      fileStream.pipe(res);
-
-      fileStream.on('error', () => {
-        res.statusCode = 500;
-        res.setHeader('Content-Type', 'text/plain');
-        res.end('500: Internal server error');
-      });
+      res.setHeader('Content-Type', getContentType(filePath));
+      res.end(data);
     });
   });
-
-  return server;
 }
+
+
+const CONTENT = {
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.js': 'application/javascript',
+  '.json': 'application/json',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.txt': 'text/plain',
+};
+
+const getContentType = (filePath) => {
+  const extname = path.extname(filePath).toLowerCase();
+
+  return CONTENT[extname] || 'application/octet-stream';
+};
 
 module.exports = {
   createServer,
